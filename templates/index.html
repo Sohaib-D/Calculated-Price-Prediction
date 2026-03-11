@@ -3,7 +3,10 @@
 
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0f0d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Pakistan Electronics Intelligence — 30+ Store Price Comparison</title>
   <meta name="description"
     content="Compare electronics prices from 30+ Pakistani stores. Find the best deals with distance, fuel cost, and route optimization.">
@@ -12,7 +15,9 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=asset_version) }}">
 </head>
 
 <body>
@@ -33,6 +38,7 @@
       </div>
       <nav class="header-nav">
         <button class="nav-btn active" data-view="optimizer">Optimizer</button>
+        <button class="nav-btn" data-view="ai-insights">AI Insights</button>
         <button class="nav-btn" data-view="catalog">All Products</button>
         <button class="nav-btn" data-view="stores">Stores</button>
         <button class="nav-btn" data-view="map">Map</button>
@@ -48,78 +54,97 @@
 
       <!-- Search Panel -->
       <aside class="panel panel-search">
-        <div class="panel-header">
-          <h2>⚡ Electronics Price Engine</h2>
-          <p>Compare prices from <strong>30+ Pakistani stores</strong>. Calculate distance, fuel cost, and find the
-            smartest deal.</p>
-          <div class="realtime-badge">● Scraping 30+ Stores Active</div>
+        <div class="panel-block">
+          <div class="panel-header">
+            <h2>⚡ Electronics Price Engine</h2>
+            <p>Compare prices from <strong>30+ Pakistani stores</strong>. Calculate distance, fuel cost, and find the
+              smartest deal.</p>
+            <div class="realtime-badge">● Scraping 30+ Stores Active</div>
+          </div>
+
+          <!-- Search Bar -->
+          <div class="form-group">
+            <label class="form-label">🔍 Search Electronics</label>
+            <input type="text" id="inp-search" placeholder="e.g. Samsung TV, Arduino, AC" class="inp search-input">
+            <button id="btn-search" class="btn btn-primary">Search & Optimize</button>
+            <div class="sub-cat-hints">
+              <span class="hint-tag" data-q="Samsung TV"># Samsung TV</span>
+              <span class="hint-tag" data-q="Arduino"># Arduino</span>
+              <span class="hint-tag" data-q="iPhone"># iPhone</span>
+              <span class="hint-tag" data-q="Laptop"># Laptop</span>
+              <span class="hint-tag" data-q="AC"># AC</span>
+              <span class="hint-tag" data-q="Washing Machine"># Washing Machine</span>
+            </div>
+          </div>
+
+          <details class="filter-collapsible" id="optimizer-filters">
+            <summary>Filters (Optional)</summary>
+            <div class="filter-body">
+              <!-- Store Filter -->
+              <div class="form-group">
+                <label class="form-label">🏬 Store Filter</label>
+                <div class="category-chips" id="store-filter-chips">
+                  <button class="chip active" data-filter="all">All Stores</button>
+                  <button class="chip" data-filter="physical">🏬 Physical</button>
+                  <button class="chip" data-filter="online">🌐 Online</button>
+                </div>
+              </div>
+
+              <!-- Budget -->
+              <div class="form-group">
+                <label class="form-label">💰 Max Budget (PKR, optional)</label>
+                <input type="number" id="inp-budget" placeholder="e.g. 50000" class="inp" min="0">
+              </div>
+
+              <!-- Priority -->
+              <div class="form-group">
+                <label class="form-label">⚖️ Optimize For</label>
+                <div class="radio-group">
+                  <label class="radio-label">
+                    <input type="radio" name="priority" value="total_cost" checked> Total Cost
+                  </label>
+                  <label class="radio-label">
+                    <input type="radio" name="priority" value="price"> Cheapest Item
+                  </label>
+                  <label class="radio-label">
+                    <input type="radio" name="priority" value="distance"> Nearest Store
+                  </label>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
 
-        <!-- Search Bar -->
-        <div class="form-group" style="margin-bottom:1.5rem">
-          <label class="form-label">🔍 Search Electronics</label>
-          <div style="display:flex;gap:10px">
-            <input type="text" id="inp-search" placeholder="e.g. Samsung TV, Arduino, AC" class="inp" style="flex:1">
-            <button id="btn-search" class="btn btn-secondary" style="padding:0 20px">Search</button>
-          </div>
-          <div class="sub-cat-hints" style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">
-            <span class="hint-tag" data-q="Samsung TV"># Samsung TV</span>
-            <span class="hint-tag" data-q="Arduino"># Arduino</span>
-            <span class="hint-tag" data-q="iPhone"># iPhone</span>
-            <span class="hint-tag" data-q="Laptop"># Laptop</span>
-            <span class="hint-tag" data-q="AC"># AC</span>
-            <span class="hint-tag" data-q="Washing Machine"># Washing Machine</span>
-          </div>
-        </div>
+        <div class="panel-divider"></div>
 
         <!-- Location -->
-        <div class="form-group">
-          <label class="form-label">📍 Your Location</label>
-          <div class="location-row">
-            <input type="number" id="inp-lat" placeholder="Latitude" step="0.0001" class="inp">
-            <input type="number" id="inp-lon" placeholder="Longitude" step="0.0001" class="inp">
-          </div>
-          <button class="btn btn-ghost btn-sm" id="btn-geolocate">
-            <span class="btn-icon">◎</span> Detect My Location
-          </button>
-        </div>
-
-        <!-- Store Filter -->
-        <div class="form-group">
-          <label class="form-label">🏬 Store Filter</label>
-          <div class="category-chips" id="store-filter-chips">
-            <button class="chip active" data-filter="all">All Stores</button>
-            <button class="chip" data-filter="physical">🏬 Physical</button>
-            <button class="chip" data-filter="online">🌐 Online</button>
-          </div>
-        </div>
-
-        <!-- Budget -->
-        <div class="form-group">
-          <label class="form-label">💰 Max Budget (PKR, optional)</label>
-          <input type="number" id="inp-budget" placeholder="e.g. 50000" class="inp" min="0">
-        </div>
-
-        <!-- Priority -->
-        <div class="form-group">
-          <label class="form-label">⚖️ Optimize For</label>
-          <div class="radio-group">
-            <label class="radio-label">
-              <input type="radio" name="priority" value="total_cost" checked> Total Cost
-            </label>
-            <label class="radio-label">
-              <input type="radio" name="priority" value="price"> Cheapest Item
-            </label>
-            <label class="radio-label">
-              <input type="radio" name="priority" value="distance"> Nearest Store
+        <div class="panel-section panel-location">
+          <div class="panel-section-title">📍 Your Location</div>
+          <div class="form-group">
+            <div class="location-search-wrap">
+              <input type="text" id="inp-location-name" placeholder="Type area/place, e.g. Saddar Rawalpindi"
+                autocomplete="off" class="inp">
+              <div class="location-suggestions hidden" id="location-suggestions"></div>
+            </div>
+            <p class="location-hint">Use exact area details for better precision.</p>
+            <div class="location-row">
+              <input type="number" id="inp-lat" placeholder="Latitude" step="0.0001" class="inp">
+              <input type="number" id="inp-lon" placeholder="Longitude" step="0.0001" class="inp">
+            </div>
+            <div class="location-actions">
+              <button class="btn btn-ghost btn-sm" id="btn-geolocate">
+                <span class="btn-icon">◎</span> Detect via GPS
+              </button>
+              <button class="btn btn-outline btn-sm" id="btn-ip-locate">
+                <span class="btn-icon">◎</span> Detect via IP
+              </button>
+            </div>
+            <label class="toggle-row">
+              <input type="checkbox" id="chk-ip-fallback" checked>
+              Use IP fallback if GPS fails (approximate)
             </label>
           </div>
         </div>
-
-        <button class="btn btn-primary" id="btn-optimize">
-          <span class="btn-icon">⟳</span>
-          <span id="btn-optimize-label">Find Best Deal</span>
-        </button>
       </aside>
 
       <!-- Results Panel -->
@@ -128,7 +153,7 @@
         <div class="empty-state" id="empty-state">
           <div class="empty-icon">⚡</div>
           <h3>Ready to Find the Best Electronics Deal</h3>
-          <p>Enter your location, search for a product, and hit "Find Best Deal" to see ranked stores with distance,
+          <p>Enter your location, search for a product, and hit "Search & Optimize" to see ranked stores with distance,
             fuel cost, and total spend breakdown.</p>
           <div class="empty-features">
             <span>📏 Distance to Store</span>
@@ -145,15 +170,151 @@
               <span class="results-count" id="results-count"></span>
             </div>
             <div class="advice-box" id="advice-box"></div>
+          <div class="results-controls" id="results-controls">
+              <label class="results-control">
+                <span>Primary Sort</span>
+                <select id="res-sort-primary" class="inp">
+                  <option value="recommended">Recommended</option>
+                  <option value="total_asc">Total: Low to High</option>
+                  <option value="price_asc">Price: Low to High</option>
+                  <option value="distance_asc">Nearest First</option>
+                  <option value="duration_asc">Fastest Drive First</option>
+                  <option value="rating_desc">Highest Rated First</option>
+                </select>
+              </label>
+              <label class="results-control">
+                <span>Secondary Sort</span>
+                <select id="res-sort-secondary" class="inp">
+                  <option value="none">None</option>
+                  <option value="total_asc">Total: Low to High</option>
+                  <option value="price_asc">Price: Low to High</option>
+                  <option value="distance_asc">Nearest First</option>
+                  <option value="duration_asc">Fastest Drive First</option>
+                  <option value="rating_desc">Highest Rated First</option>
+                </select>
+              </label>
+              <label class="results-control">
+                <span>Max Distance (km)</span>
+                <input id="res-max-distance" type="number" min="0" step="0.1" placeholder="Any" class="inp">
+              </label>
+              <label class="results-control">
+                <span>Max Total (PKR)</span>
+                <input id="res-max-total" type="number" min="0" step="1" placeholder="Any" class="inp">
+              </label>
+              <label class="results-control">
+                <span>Min Rating</span>
+                <select id="res-min-rating" class="inp">
+                  <option value="0">Any</option>
+                  <option value="3">3.0+</option>
+                  <option value="4">4.0+</option>
+                  <option value="4.5">4.5+</option>
+                </select>
+              </label>
+              <button id="res-reset-filters" type="button" class="btn btn-outline btn-sm">Reset Filters</button>
+            </div>
           </div>
+          <div class="results-fallback hidden" id="results-fallback"></div>
           <div class="cards-grid" id="cards-grid"></div>
         </div>
 
-        <!-- Multi-stop plan -->
-        <div class="multi-plan hidden" id="multi-plan">
-          <h3>🗺 Optimal Multi-Stop Route</h3>
-          <div class="stops-list" id="stops-list"></div>
-          <div class="plan-summary" id="plan-summary"></div>
+                <!-- AI Intelligence Panel -->
+        <div class="ai-panel hidden" id="ai-panel">
+          <div class="ai-panel-header">
+            <h3 class="ai-panel-title">🧠 AI Decision Intelligence</h3>
+            <span class="ai-badge">AI Powered</span>
+          </div>
+          <div class="ai-section ai-summary" id="ai-summary"></div>
+          <div class="ai-section ai-best-option" id="ai-best-option"></div>
+                    <!-- Quality Score + Price Eval + Demand row -->
+          <div class="ai-trio-row">
+            <div class="ai-section ai-quality-score" id="ai-quality-score"></div>
+            <div class="ai-section ai-price-eval" id="ai-price-eval"></div>
+            <div class="ai-section ai-demand-trend" id="ai-demand-trend"></div>
+          </div>
+
+          <!-- Buying Advice -->
+          <div class="ai-section ai-buying-advice" id="ai-buying-advice"></div>
+
+          <!-- Risk Warnings -->
+          <div class="ai-section ai-risk-warnings hidden" id="ai-risk-warnings"></div>
+
+          <!-- Model Comparison -->
+          <div class="ai-section ai-model-comparison" id="ai-model-comparison"></div>
+
+          <div class="ai-row">
+            <div class="ai-section ai-prediction" id="ai-prediction"></div>
+            <div class="ai-section ai-savings" id="ai-savings"></div>
+          </div>
+          <div class="ai-section ai-cost-breakdown" id="ai-cost-breakdown"></div>
+          <div class="ai-section ai-insights" id="ai-insights"></div>
+          <details class="ai-section ai-reasoning-details">
+            <summary class="ai-reasoning-toggle">🧠 AI Reasoning — How this decision was made</summary>
+            <div class="ai-reasoning-content" id="ai-reasoning"></div>
+          </details>
+          <div class="ai-section ai-tips" id="ai-tips">
+            <h4 class="ai-section-title">💡 Smart Tips</h4>
+            <div class="ai-tips-list" id="ai-tips-list"></div>
+          </div>
+        </div>
+
+        <!-- AI Chat Panel -->
+        <div class="ai-chat-panel" id="ai-chat-panel">
+          <div class="ai-chat-header">
+            <h3 class="ai-chat-title">AI Product Advisor</h3>
+            <span class="ai-chat-meta">Ask questions about the recommendation</span>
+          </div>
+          <div class="ai-chat-body" id="ai-chat-body">
+            <div class="ai-chat-empty" id="ai-chat-empty">Run a search to start asking questions.</div>
+          </div>
+          <form class="ai-chat-form" id="ai-chat-form">
+            <input type="text" id="ai-chat-input" class="inp" placeholder="Ask about price, warranty, or alternatives"
+              autocomplete="off" disabled>
+            <button type="submit" id="ai-chat-send" class="btn btn-secondary" disabled>Send</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── AI INSIGHTS VIEW ─────────────────────────────────────────── -->
+    <section class="view" id="view-ai-insights">
+      <div class="ai-insights-view">
+        <div class="ai-insights-view-header">
+          <div>
+            <h2>AI Insights</h2>
+            <p>Market signals, trending products, and price movements tailored to your location.</p>
+          </div>
+        </div>
+        <div class="ai-insights-dashboard" id="ai-insights-dashboard">
+          <div class="ai-insights-dashboard-header">
+            <h3>📊 AI Insights Dashboard</h3>
+            <button id="btn-refresh-ai-insights" type="button" class="btn btn-outline btn-sm">Refresh Insights</button>
+          </div>
+          <div class="ai-insights-dashboard-grid">
+            <section class="ai-insights-dashboard-card">
+              <h4>🔥 Trending Products</h4>
+              <ul class="ai-insights-dashboard-list" id="insights-trending-list">
+                <li class="ai-insights-placeholder">Loading trending products…</li>
+              </ul>
+            </section>
+            <section class="ai-insights-dashboard-card">
+              <h4>📉 Biggest Price Drops</h4>
+              <ul class="ai-insights-dashboard-list" id="insights-price-drops-list">
+                <li class="ai-insights-placeholder">Loading price drops…</li>
+              </ul>
+            </section>
+            <section class="ai-insights-dashboard-card">
+              <h4>⚡ Best Deals Today</h4>
+              <ul class="ai-insights-dashboard-list" id="insights-best-deals-list">
+                <li class="ai-insights-placeholder">Loading best deals…</li>
+              </ul>
+            </section>
+            <section class="ai-insights-dashboard-card">
+              <h4>📂 Popular Categories</h4>
+              <ul class="ai-insights-dashboard-list" id="insights-popular-categories-list">
+                <li class="ai-insights-placeholder">Loading categories…</li>
+              </ul>
+            </section>
+          </div>
         </div>
       </div>
     </section>
@@ -208,12 +369,16 @@
         <p style="font-size:0.75rem; color:var(--muted); margin-bottom:10px">Physical store locations across Pakistan
         </p>
         <div id="branch-legend-list"></div>
+        <div class="route-panel" id="route-panel">
+          <h4>Route Planner</h4>
+          <p id="route-summary">Choose a store, then click <strong>Show Route</strong>.</p>
+          <div class="store-actions">
+            <button class="btn btn-outline btn-sm" id="btn-start-route-nav" type="button" disabled>Focus Route</button>
+            <button class="btn btn-outline btn-sm" id="btn-clear-route" type="button">Clear Route</button>
+          </div>
+        </div>
       </div>
-      <iframe id="gmap-iframe"
-        src="https://www.google.com/maps/embed?pb=!1m12!1m3!1d14474757.2186178!2d69.345116!3d30.375321!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!2m1!1sElectronics%20stores%20Pakistan!5e0!3m2!1sen!2spk!4v1700000000000!5m2!1sen!2spk"
-        width="100%" height="100%" style="border:0;" allowfullscreen="" loading="lazy"
-        referrerpolicy="no-referrer-when-downgrade">
-      </iframe>
+      <div id="map-canvas" class="gmap-container" role="region" aria-label="Store map"></div>
     </section>
 
   </main>
@@ -230,20 +395,16 @@
   <div class="toast-container" id="toast-container"></div>
 
   <!-- ── Scripts ───────────────────────────────────────────────────────── -->
-  <script>
-    window.GOOGLE_MAPS_KEY = "{{ google_maps_key }}";
-  </script>
-  <script src="{{ url_for('static', filename='script.js') }}"></script>
-
-  {% if google_maps_key and google_maps_key != 'YOUR_GOOGLE_MAPS_API_KEY_HERE' %}
-  <script async defer src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&callback=initMap"></script>
-  {% else %}
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="{{ url_for('static', filename='script.js', v=asset_version) }}"></script>
   <script>
     window.addEventListener('load', () => {
       if (typeof window.initMap === 'function') window.initMap(false);
     });
   </script>
-  {% endif %}
 </body>
 
 </html>
+
+

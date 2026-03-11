@@ -7,14 +7,108 @@ Falls back to curated demo data for stores that block scraping.
 import time
 import re
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
-from config import REQUEST_TIMEOUT, REQUEST_DELAY, STORES
+from config import (
+    REQUEST_TIMEOUT,
+    REQUEST_DELAY,
+    SCRAPER_CONNECT_TIMEOUT,
+    SCRAPER_MAX_WORKERS,
+    SCRAPER_READ_TIMEOUT,
+    SCRAPE_SEED_STORES,
+    SEED_STORES,
+    STORES,
+)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+}
+
+TARGET_STORES = STORES + (SEED_STORES if SCRAPE_SEED_STORES else [])
+STORE_INDEX = {store["id"]: store for store in TARGET_STORES}
+
+# Category hints to keep category searches relevant but not empty.
+_CATEGORY_KEYWORDS = {
+    "laptop": {
+        "laptop", "notebook", "macbook", "thinkpad", "vivobook", "ideapad", "inspiron", "xps",
+        "nitro", "alienware", "pavilion", "probook", "latitude", "legion", "tuf", "rog",
+        "victus", "aspire", "surface", "matebook",
+    },
+    "mobile": {
+        "mobile", "phone", "smartphone", "iphone", "galaxy", "redmi", "realme", "qmobile",
+        "oppo", "vivo", "pixel", "infinix", "tecno", "itel", "nokia", "oneplus", "honor",
+    },
+    "tv": {"tv", "television", "oled", "qled", "bravia", "uhd", "smarttv", "smart"},
+    "tablet": {"tablet", "ipad", "tab", "pad"},
+    "headphone": {"headphone", "headphones", "earbuds", "airpods", "buds", "headset"},
+    "smartwatch": {"watch", "smartwatch", "band"},
+    "console": {"console", "playstation", "ps5", "xbox", "switch", "nintendo"},
+}
+
+_CATEGORY_ALIASES = {
+    "laptops": "laptop",
+    "notebooks": "laptop",
+    "phones": "mobile",
+    "mobiles": "mobile",
+    "smartphones": "mobile",
+    "televisions": "tv",
+    "tvs": "tv",
+    "headphones": "headphone",
+    "earbud": "headphone",
+    "earbuds": "headphone",
+    "watches": "smartwatch",
+}
+
+
+def _normalize_tokens(text: str | None) -> list[str]:
+    return [t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if t]
+
+
+def _query_category(query: str | None) -> str | None:
+    tokens = _normalize_tokens(query)
+    if not tokens:
+        return None
+    for token in tokens:
+        if token in _CATEGORY_ALIASES:
+            return _CATEGORY_ALIASES[token]
+        if token in _CATEGORY_KEYWORDS:
+            return token
+    return None
+
+
+def _category_match(name: str, category: str) -> bool:
+    tokens = set(_normalize_tokens(name))
+    keywords = _CATEGORY_KEYWORDS.get(category, set())
+    return bool(tokens & keywords)
+
+PLATFORM_SELECTORS = {
+    "woocommerce": {
+        "product_sel": ".product",
+        "name_sel": ".woocommerce-loop-product__title, .product-title, h2",
+        "price_sel": ".price .amount, .price",
+        "link_sel": "a",
+    },
+    "magento": {
+        "product_sel": ".product-item, .item, .product",
+        "name_sel": ".product-item-link, .product-name a, h2, h3",
+        "price_sel": ".price, .special-price .price, .regular-price .price",
+        "link_sel": "a.product-item-link, a",
+    },
+    "shopify": {
+        "product_sel": ".product-item, .product, .product-card, .grid-product",
+        "name_sel": ".product-title, .product-card__title, .product-name, h3, h2",
+        "price_sel": ".price, .product-price, .money",
+        "link_sel": "a",
+    },
+    "generic": {
+        "product_sel": ".product, .product-item, .product-card, .grid-product",
+        "name_sel": "h2, h3, h4, .product-title, .product-name",
+        "price_sel": ".price, .product-price, .amount, .money",
+        "link_sel": "a",
+    },
 }
 
 # ── Scrape Configs per store ──────────────────────────────────────────────────
@@ -203,6 +297,27 @@ SCRAPE_CONFIGS = {
         "price_sel": ".price--current, .currency",
         "link_sel": "a",
     },
+    "priceoye": {
+        "search_url": "https://priceoye.pk/search?search={query}",
+        "product_sel": ".productBox, .product-box, .product",
+        "name_sel": ".p-title, .product-name, h3, h2",
+        "price_sel": ".p-price, .price, .product-price",
+        "link_sel": "a",
+    },
+    "pakmobizone": {
+        "search_url": "https://www.pakmobizone.pk/search?type=product&q={query}",
+        "product_sel": ".product-item, .product, .product-card",
+        "name_sel": ".product-title, .product-name, h3, h2",
+        "price_sel": ".price, .product-price, .money",
+        "link_sel": "a",
+    },
+    "mistore": {
+        "search_url": "https://mistore.pk/search?type=product&q={query}",
+        "product_sel": ".product-item, .product, .product-card",
+        "name_sel": ".product-title, .product-name, h3, h2",
+        "price_sel": ".price, .product-price, .money",
+        "link_sel": "a",
+    },
     "dcart": {
         "search_url": "https://dcart.pk/?s={query}&post_type=product",
         "product_sel": ".product",
@@ -244,6 +359,379 @@ SCRAPE_CONFIGS = {
         "name_sel": ".product-card__title, h3",
         "price_sel": ".product-card__price, .price",
         "link_sel": "a",
+    },
+    "czone": {
+        "search_url": "https://www.czone.com.pk/search.aspx?kw={query}",
+        "product_sel": ".product, .product-box, .product-grid",
+        "name_sel": ".title, .product-name, h4, h3, a",
+        "price_sel": ".price, .actual-price, .product-price",
+        "link_sel": "a",
+    },
+    "paklap": {
+        "search_url": "https://www.paklap.pk/catalogsearch/result/?q={query}",
+        "product_sel": ".product-item, .product",
+        "name_sel": ".product-item-link, .product-name a, h2",
+        "price_sel": ".price, .special-price .price, .regular-price .price",
+        "link_sel": "a.product-item-link, a",
+    },
+    "computerzone": {
+        "search_url": "https://www.computerzone.com.pk/search.aspx?kw={query}",
+        "product_sel": ".product, .product-box, .product-grid",
+        "name_sel": ".title, .product-name, h4, h3, a",
+        "price_sel": ".price, .actual-price, .product-price",
+        "link_sel": "a",
+    },
+    "w11stop": {
+        "search_url": "https://www.w11stop.com/catalogsearch/result/?q={query}",
+        "product_sel": ".product-item, .product",
+        "name_sel": ".product-item-link, .product-name a, h2",
+        "price_sel": ".price, .special-price .price, .regular-price .price",
+        "link_sel": "a.product-item-link, a",
+    },
+    "tejar": {
+        "search_url": "https://www.tejar.pk/catalogsearch/result/?q={query}",
+        "product_sel": ".product-item, .product",
+        "name_sel": ".product-item-link, .product-name a, h2",
+        "price_sel": ".price, .special-price .price, .regular-price .price",
+        "link_sel": "a.product-item-link, a",
+    },
+    "myshop": {
+        "search_url": "https://www.myshop.pk/catalogsearch/result/?q={query}",
+        "product_sel": ".product-item, .product",
+        "name_sel": ".product-item-link, .product-name a, h2",
+        "price_sel": ".price, .special-price .price, .regular-price .price",
+        "link_sel": "a.product-item-link, a",
+    },
+    # Seed stores (search URL patterns)
+    "aysonline": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.aysonline.pk/catalogsearch/result/?q={query}",
+            "https://www.aysonline.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "flipzon": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.flipzon.pk/search?type=product&q={query}",
+            "https://www.flipzon.pk/search?q={query}",
+        ],
+    },
+    "zahcomputers": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.zahcomputers.pk/catalogsearch/result/?q={query}",
+            "https://www.zahcomputers.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "eezeepc": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.eezeepc.com/catalogsearch/result/?q={query}",
+            "https://www.eezeepc.com/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "techsouls": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.techsouls.pk/search?type=product&q={query}",
+            "https://www.techsouls.pk/search?q={query}",
+        ],
+    },
+    "computers_pk": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.computers.pk/catalogsearch/result/?q={query}",
+            "https://www.computers.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "pakipc": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.pakipc.com/catalogsearch/result/?q={query}",
+            "https://www.pakipc.com/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "techglobe": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.techglobe.pk/search?type=product&q={query}",
+            "https://www.techglobe.pk/search?q={query}",
+        ],
+    },
+    "techcity": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.techcity.pk/search?type=product&q={query}",
+            "https://www.techcity.pk/search?q={query}",
+        ],
+    },
+    "gtstore": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.gtstore.pk/catalogsearch/result/?q={query}",
+            "https://www.gtstore.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "techmart": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.techmart.pk/catalogsearch/result/?q={query}",
+            "https://www.techmart.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "laptopmall": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.laptopmall.pk/catalogsearch/result/?q={query}",
+            "https://www.laptopmall.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "laptopoutlet": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.laptopoutlet.pk/catalogsearch/result/?q={query}",
+            "https://www.laptopoutlet.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "smartlink": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.smartlink.pk/catalogsearch/result/?q={query}",
+            "https://www.smartlink.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "buyon": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.buyon.pk/search?type=product&q={query}",
+            "https://www.buyon.pk/search?q={query}",
+        ],
+    },
+    "shopon": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.shopon.pk/search?type=product&q={query}",
+            "https://www.shopon.pk/search?q={query}",
+        ],
+    },
+    "clicky": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.clicky.pk/search?type=product&q={query}",
+            "https://www.clicky.pk/search?q={query}",
+        ],
+    },
+    "symbios": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.symbios.pk/search?type=product&q={query}",
+            "https://www.symbios.pk/search?q={query}",
+        ],
+    },
+    "yayvo": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.yayvo.com/catalogsearch/result/?q={query}",
+            "https://www.yayvo.com/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "haier": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.haier.com.pk/search?q={query}",
+            "https://www.haier.com.pk/search?query={query}",
+        ],
+    },
+    "pel": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.pel.com.pk/search?q={query}",
+            "https://www.pel.com.pk/search?query={query}",
+        ],
+    },
+    "orient": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.orient.com.pk/search?q={query}",
+            "https://www.orient.com.pk/search?query={query}",
+        ],
+    },
+    "dawlance": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.dawlance.com.pk/search?q={query}",
+            "https://www.dawlance.com.pk/search?query={query}",
+        ],
+    },
+    "gree": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.gree.com.pk/search?q={query}",
+            "https://www.gree.com.pk/search?query={query}",
+        ],
+    },
+    "boss": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.boss.com.pk/search?q={query}",
+            "https://www.boss.com.pk/search?query={query}",
+        ],
+    },
+    "waves": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.waves.com.pk/search?q={query}",
+            "https://www.waves.com.pk/search?query={query}",
+        ],
+    },
+    "nasgas": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.nasgas.com.pk/search?q={query}",
+            "https://www.nasgas.com.pk/search?query={query}",
+        ],
+    },
+    "hallroad": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.hallroad.org/search?q={query}",
+            "https://www.hallroad.org/?s={query}",
+        ],
+    },
+    "robotics_pk": {
+        "platform": "woocommerce",
+        "search_urls": [
+            "https://www.robotics.pk/?s={query}&post_type=product",
+        ],
+    },
+    "microcontrollershop": {
+        "platform": "woocommerce",
+        "search_urls": [
+            "https://www.microcontrollershop.pk/?s={query}&post_type=product",
+        ],
+    },
+    "electronicshub": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.electronicshub.pk/search?q={query}",
+            "https://www.electronicshub.pk/?s={query}",
+        ],
+    },
+    "paktronics": {
+        "platform": "woocommerce",
+        "search_urls": [
+            "https://www.paktronics.com/?s={query}&post_type=product",
+        ],
+    },
+    "electroniks": {
+        "platform": "woocommerce",
+        "search_urls": [
+            "https://www.electroniks.pk/?s={query}&post_type=product",
+        ],
+    },
+    "microcontroller": {
+        "platform": "woocommerce",
+        "search_urls": [
+            "https://www.microcontroller.pk/?s={query}&post_type=product",
+        ],
+    },
+    "warcomputer": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.warcomputer.com/catalogsearch/result/?q={query}",
+            "https://www.warcomputer.com/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "rbtechngames": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.rbtechngames.com/search?type=product&q={query}",
+            "https://www.rbtechngames.com/search?q={query}",
+        ],
+    },
+    "gamesngeeks": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.gamesngeeks.com/search?type=product&q={query}",
+            "https://www.gamesngeeks.com/search?q={query}",
+        ],
+    },
+    "ziptech": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.ziptech.pk/catalogsearch/result/?q={query}",
+            "https://www.ziptech.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "pcfanatics": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.pcfanatics.pk/search?type=product&q={query}",
+            "https://www.pcfanatics.pk/search?q={query}",
+        ],
+    },
+    "globalcomputers": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.globalcomputers.pk/catalogsearch/result/?q={query}",
+            "https://www.globalcomputers.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "techark": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.techark.pk/search?type=product&q={query}",
+            "https://www.techark.pk/search?q={query}",
+        ],
+    },
+    "hfstore": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.hfstore.pk/search?type=product&q={query}",
+            "https://www.hfstore.pk/search?q={query}",
+        ],
+    },
+    "ascomputer": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.ascomputer.pk/catalogsearch/result/?q={query}",
+            "https://www.ascomputer.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "techarc": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.techarc.pk/search?type=product&q={query}",
+            "https://www.techarc.pk/search?q={query}",
+        ],
+    },
+    "whatmobile": {
+        "platform": "generic",
+        "search_urls": [
+            "https://www.whatmobile.com.pk/search.php?search={query}",
+        ],
+    },
+    "mobilemall": {
+        "platform": "magento",
+        "search_urls": [
+            "https://www.mobilemall.pk/catalogsearch/result/?q={query}",
+            "https://www.mobilemall.pk/index.php/catalogsearch/result/?q={query}",
+        ],
+    },
+    "babloo": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.babloo.pk/search?type=product&q={query}",
+            "https://www.babloo.pk/search?q={query}",
+        ],
+    },
+    "phonestore": {
+        "platform": "shopify",
+        "search_urls": [
+            "https://www.phonestore.pk/search?type=product&q={query}",
+            "https://www.phonestore.pk/search?q={query}",
+        ],
     },
 }
 
@@ -480,6 +968,27 @@ STORE_PRODUCTS = {
         {"product": "Havit MS752 Gaming Mouse RGB", "price": 2500, "rating": 4.3},
         {"product": "Redragon K552 Mechanical Keyboard", "price": 8500, "rating": 4.6},
     ],
+    "priceoye": [
+        {"product": "Infinix Hot 10 Play 4GB/64GB", "price": 29999, "rating": 4.4},
+        {"product": "Realme 9C 4GB/64GB", "price": 36999, "rating": 4.5},
+        {"product": "Redmi Note 12 6GB/128GB", "price": 52999, "rating": 4.6},
+        {"product": "Samsung Galaxy A15 6GB/128GB", "price": 58999, "rating": 4.5},
+        {"product": "Tecno Spark 20C 4GB/128GB", "price": 27999, "rating": 4.3},
+    ],
+    "pakmobizone": [
+        {"product": "QMobile i6 Metal", "price": 10999, "rating": 4.1},
+        {"product": "Infinix Hot 12 Play", "price": 30999, "rating": 4.4},
+        {"product": "Realme C33 4GB/64GB", "price": 34999, "rating": 4.3},
+        {"product": "Redmi 12C 4GB/64GB", "price": 31999, "rating": 4.4},
+        {"product": "Samsung Galaxy A05 4GB/64GB", "price": 29999, "rating": 4.2},
+    ],
+    "mistore": [
+        {"product": "Redmi Note 13 8GB/256GB", "price": 79999, "rating": 4.7},
+        {"product": "Redmi 12 6GB/128GB", "price": 44999, "rating": 4.4},
+        {"product": "Xiaomi Redmi Buds 5", "price": 8999, "rating": 4.3},
+        {"product": "Xiaomi Smart Band 8", "price": 11999, "rating": 4.5},
+        {"product": "Xiaomi 67W Charger", "price": 3999, "rating": 4.2},
+    ],
     "dcart": [
         {"product": "Motor Driver Shield L293D Arduino", "price": 650, "rating": 4.4},
         {"product": "4x4 Membrane Keypad", "price": 280, "rating": 4.3},
@@ -521,6 +1030,48 @@ STORE_PRODUCTS = {
         {"product": "Echo Dot 5th Gen Smart Speaker", "price": 10500, "rating": 4.5},
         {"product": "Philips Hue Starter Kit 3 Bulbs", "price": 18500, "rating": 4.7},
     ],
+    "czone": [
+        {"product": "Dell Inspiron 15 Core i5 12th Gen", "price": 164999, "rating": 4.5},
+        {"product": "HP Victus 15 Ryzen 5 RTX 3050", "price": 239999, "rating": 4.6},
+        {"product": "Lenovo IdeaPad Slim 3 15 Ryzen 7", "price": 169999, "rating": 4.4},
+        {"product": "ASUS TUF Gaming F15 Core i7", "price": 289999, "rating": 4.6},
+        {"product": "Samsung 970 EVO Plus 1TB SSD", "price": 22999, "rating": 4.7},
+    ],
+    "paklap": [
+        {"product": "Apple MacBook Air M2 13\" 256GB", "price": 329999, "rating": 4.8},
+        {"product": "HP Pavilion 15 Ryzen 5 8GB", "price": 175000, "rating": 4.5},
+        {"product": "ASUS VivoBook 15 Core i5 12th Gen", "price": 158000, "rating": 4.4},
+        {"product": "Acer Aspire 5 Core i5 12th Gen", "price": 149999, "rating": 4.3},
+        {"product": "Lenovo ThinkPad E14 Gen 4", "price": 219000, "rating": 4.6},
+    ],
+    "computerzone": [
+        {"product": "AMD Ryzen 5 5600X Processor", "price": 42999, "rating": 4.6},
+        {"product": "NVIDIA GeForce RTX 4060 8GB", "price": 119999, "rating": 4.7},
+        {"product": "Samsung 27\" Curved Monitor", "price": 59999, "rating": 4.5},
+        {"product": "Corsair 16GB DDR4 3200MHz RAM", "price": 11999, "rating": 4.5},
+        {"product": "TP-Link Archer C6 Router", "price": 7999, "rating": 4.4},
+    ],
+    "w11stop": [
+        {"product": "Samsung Galaxy A15 128GB", "price": 44999, "rating": 4.4},
+        {"product": "Xiaomi Redmi Note 13 6GB/128GB", "price": 69999, "rating": 4.5},
+        {"product": "Apple AirPods Pro 2nd Gen", "price": 54999, "rating": 4.7},
+        {"product": "Apple iPad 10th Gen 64GB WiFi", "price": 115000, "rating": 4.7},
+        {"product": "Sony WH-1000XM5 Headphones", "price": 69999, "rating": 4.8},
+    ],
+    "tejar": [
+        {"product": "Sony PlayStation 5 Disc Edition", "price": 175000, "rating": 4.8},
+        {"product": "Apple Watch Series 9 45mm GPS", "price": 125000, "rating": 4.7},
+        {"product": "GoPro Hero 12 Black", "price": 149999, "rating": 4.6},
+        {"product": "Nintendo Switch OLED", "price": 109999, "rating": 4.6},
+        {"product": "Apple TV 4K 64GB", "price": 64999, "rating": 4.5},
+    ],
+    "myshop": [
+        {"product": "Samsung 43\" 4K Smart TV", "price": 89999, "rating": 4.4},
+        {"product": "Haier 1 Ton Inverter AC", "price": 98000, "rating": 4.3},
+        {"product": "Dawlance Microwave Oven 30L", "price": 25500, "rating": 4.2},
+        {"product": "Philips Air Fryer HD9252", "price": 28999, "rating": 4.5},
+        {"product": "Orient Refrigerator 10 cft", "price": 62000, "rating": 4.3},
+    ],
 }
 
 
@@ -535,12 +1086,58 @@ def _parse_price(text: str) -> float:
         return 0.0
 
 
-def _scrape_store(store_id: str, query: str = "electronics") -> list[dict]:
+def _matches_query(product_name: str, query: str | None) -> bool:
+    """
+    Check whether a product should be included for a search query.
+    Keeps electronics default wide, but narrows specific queries.
+    """
+    if not query:
+        return True
+
+    q = query.strip().lower()
+    if not q or q == "electronics":
+        return True
+
+    name = (product_name or "").strip().lower()
+    if not name:
+        return False
+    if q in name:
+        return True
+
+    category = _query_category(q)
+    category_match = _category_match(name, category) if category else False
+
+    # Use word-boundary match for short queries like "tv".
+    if len(q) <= 3:
+        if re.search(rf"\b{re.escape(q)}\b", name):
+            return True
+        return category_match
+
+    # Require all meaningful words to appear for better precision.
+    tokens = [t for t in re.split(r"\s+", q) if len(t) >= 3]
+    if not tokens:
+        return category_match or q in name
+
+    if all(t in name for t in tokens):
+        return True
+
+    # For category searches (e.g., "laptop", "mobile"), allow category match
+    # to avoid empty results when product names are brand-specific.
+    if category_match:
+        return True
+
+    return False
+
+
+def _scrape_store(store_id: str, query: str = "electronics", verbose: bool = True) -> list[dict]:
     """
     Attempt to scrape a store. Falls back to curated data on failure.
     """
     config = SCRAPE_CONFIGS.get(store_id)
-    store_info = next((s for s in STORES if s["id"] == store_id), None)
+    if config and config.get("platform"):
+        selectors = PLATFORM_SELECTORS.get(config["platform"], PLATFORM_SELECTORS["generic"])
+        config = {**selectors, **config}
+    store_info = STORE_INDEX.get(store_id)
     if not store_info:
         return []
 
@@ -552,62 +1149,71 @@ def _scrape_store(store_id: str, query: str = "electronics") -> list[dict]:
     # Attempt real scrape if config exists and store has a URL
     if config and store_url:
         try:
-            url = config["search_url"].format(query=query)
-            resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
-            resp.raise_for_status()
-
-            soup = BeautifulSoup(resp.text, "html.parser")
-            cards = soup.select(config["product_sel"])
-
-            for card in cards[:20]:  # Cap at 20 per store
-                name_el = card.select_one(config["name_sel"])
-                price_el = card.select_one(config["price_sel"])
-                link_el = card.select_one(config["link_sel"])
-
-                if not name_el:
+            urls = config.get("search_urls") or [config.get("search_url")]
+            timeout = (max(0.5, float(SCRAPER_CONNECT_TIMEOUT)), max(0.5, float(SCRAPER_READ_TIMEOUT)))
+            for search_url in urls:
+                if not search_url:
                     continue
+                url = search_url.format(query=query)
+                resp = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
+                resp.raise_for_status()
 
-                name = name_el.get_text(strip=True)
-                price = _parse_price(price_el.get_text(strip=True)) if price_el else 0
-                link = ""
-                if link_el and link_el.get("href"):
-                    href = link_el["href"]
-                    if href.startswith("http"):
-                        link = href
-                    elif href.startswith("/"):
-                        link = store_url.rstrip("/") + href
-                    else:
-                        link = store_url.rstrip("/") + "/" + href
+                soup = BeautifulSoup(resp.text, "html.parser")
+                cards = soup.select(config["product_sel"])
+                attempt_products = []
 
-                if name and price > 0:
-                    products.append({
-                        "product": name,
-                        "price": price,
-                        "rating": 4,
-                        "reviews": 0,
-                        "in_stock": True,
-                        "category": "electronics",
-                        "source_store": store_name,
-                        "store_type": store_type,
-                        "source_url": link or url,
-                        "description": f"From {store_name}",
-                    })
+                for card in cards[:20]:  # Cap at 20 per store
+                    name_el = card.select_one(config["name_sel"])
+                    price_el = card.select_one(config["price_sel"])
+                    link_el = card.select_one(config["link_sel"])
 
-            if products:
-                print(f"  ✓ {store_name}: scraped {len(products)} products")
-                time.sleep(REQUEST_DELAY)
-                return products
+                    if not name_el:
+                        continue
+
+                    name = name_el.get_text(strip=True)
+                    price = _parse_price(price_el.get_text(strip=True)) if price_el else 0
+                    link = ""
+                    if link_el and link_el.get("href"):
+                        href = link_el["href"]
+                        if href.startswith("http"):
+                            link = href
+                        elif href.startswith("/"):
+                            link = store_url.rstrip("/") + href
+                        else:
+                            link = store_url.rstrip("/") + "/" + href
+
+                    if name and price > 0 and _matches_query(name, query):
+                        attempt_products.append({
+                            "product": name,
+                            "price": price,
+                            "rating": 4,
+                            "reviews": 0,
+                            "in_stock": True,
+                            "category": "electronics",
+                            "source_store": store_name,
+                            "store_type": store_type,
+                            "source_url": link or url,
+                            "description": f"From {store_name}",
+                        })
+
+                if attempt_products:
+                    products = attempt_products
+                    if verbose:
+                        print(f"  [OK] {store_name}: scraped {len(products)} products")
+                    if REQUEST_DELAY > 0:
+                        time.sleep(REQUEST_DELAY)
+                    return products
 
         except Exception as e:
-            print(f"  ✗ {store_name}: scrape failed ({e}), using curated data")
+            if verbose:
+                print(f"  [WARN] {store_name}: scrape failed ({e}), using curated data")
 
     # Fallback: use curated demo data
     curated = STORE_PRODUCTS.get(store_id, [])
     for p in curated:
         # If a query is provided, do a simple keyword match
-        if query and query.lower() != "electronics":
-            if query.lower() not in p["product"].lower():
-                continue
+        if not _matches_query(p["product"], query):
+            continue
 
         products.append({
             "product": p["product"],
@@ -619,11 +1225,11 @@ def _scrape_store(store_id: str, query: str = "electronics") -> list[dict]:
             "source_store": store_name,
             "store_type": store_type,
             "source_url": store_url or "#",
-            "description": f"From {store_name}" + (f" — {p.get('description', '')}" if p.get('description') else ""),
+            "description": f"From {store_name}" + (f" - {p.get('description', '')}" if p.get('description') else ""),
         })
 
-    # If search query didn't match curated data, return all curated
-    if not products and curated:
+    # If generic electronics fetch and no matches yet, return curated defaults.
+    if not products and curated and (not query or query.lower().strip() == "electronics"):
         for p in curated:
             products.append({
                 "product": p["product"],
@@ -641,7 +1247,7 @@ def _scrape_store(store_id: str, query: str = "electronics") -> list[dict]:
     return products
 
 
-def fetch_all_stores(query: str = None, max_per_store: int = 20) -> list[dict]:
+def fetch_all_stores(query: str = None, max_per_store: int = 20, verbose: bool = True) -> list[dict]:
     """
     Fetch products from ALL 30+ stores. 
     Returns aggregated, deduplicated product list.
@@ -650,25 +1256,64 @@ def fetch_all_stores(query: str = None, max_per_store: int = 20) -> list[dict]:
     seen = set()
     search_term = query if query else "electronics"
 
-    print(f"\n{'='*60}")
-    print(f"  Scraping {len(STORES)} stores for: '{search_term}'")
-    print(f"{'='*60}")
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"  Scraping {len(TARGET_STORES)} stores for: '{search_term}'")
+        print(f"{'='*60}")
 
-    for store in STORES:
-        store_id = store["id"]
-        try:
-            prods = _scrape_store(store_id, search_term)
+    max_workers = max(1, min(int(SCRAPER_MAX_WORKERS), len(TARGET_STORES)))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_to_store = {
+            pool.submit(_scrape_store, store["id"], search_term, verbose): store
+            for store in TARGET_STORES
+        }
+
+        for future in as_completed(future_to_store):
+            store = future_to_store[future]
+            try:
+                prods = future.result()
+            except Exception as e:
+                if verbose:
+                    print(f"  [WARN] {store['name']}: error ({e})")
+                continue
+
             for p in prods[:max_per_store]:
-                key = p["product"].lower().strip()
+                # Keep product detail per website/store; avoid cross-store de-dup loss.
+                key = f"{(p.get('source_store') or '').lower().strip()}::{p['product'].lower().strip()}"
                 if key not in seen:
                     all_products.append(p)
                     seen.add(key)
-        except Exception as e:
-            print(f"  ✗ {store['name']}: error ({e})")
-            continue
 
-    print(f"\n  Total unique products: {len(all_products)}")
-    print(f"{'='*60}\n")
+    if not all_products and query:
+        if verbose:
+            print("  [WARN] No matches found. Using broad catalog fallback.")
+        for store in TARGET_STORES:
+            store_id = store["id"]
+            curated = STORE_PRODUCTS.get(store_id, [])
+            if not curated:
+                continue
+            for p in curated[:max_per_store]:
+                key = f"{store['name'].lower().strip()}::{p['product'].lower().strip()}"
+                if key in seen:
+                    continue
+                all_products.append({
+                    "product": p["product"],
+                    "price": float(p["price"]),
+                    "rating": p.get("rating", 4),
+                    "reviews": p.get("reviews", 10),
+                    "in_stock": True,
+                    "category": "electronics",
+                    "source_store": store["name"],
+                    "store_type": store["type"],
+                    "source_url": store.get("url", "") or "#",
+                    "description": f"From {store['name']}",
+                })
+                seen.add(key)
+
+    if verbose:
+        print(f"\n  Total unique products: {len(all_products)}")
+        print(f"{'='*60}\n")
 
     return all_products
 
@@ -677,4 +1322,4 @@ if __name__ == "__main__":
     items = fetch_all_stores()
     print(f"\nTotal: {len(items)} products from {len(set(p['source_store'] for p in items))} stores")
     for p in items[:10]:
-        print(f"  [{p['source_store']}] {p['product']} — Rs. {p['price']:,.0f}")
+        print(f"  [{p['source_store']}] {p['product']} - Rs. {p['price']:,.0f}")

@@ -1,4 +1,4 @@
-<![CDATA[# ⚡ Pakistan Electronics Price Intelligence
+# ⚡ Pakistan Electronics Price Intelligence
 
 A full-stack price comparison and route optimization platform for Pakistani electronics stores. Scrapes real-time product data from **30+ stores**, calculates travel costs (fuel + time), and recommends the best deal factoring in both **product price and physical distance**.
 
@@ -15,15 +15,18 @@ A full-stack price comparison and route optimization platform for Pakistani elec
 | 🗺️ **Multi-Stop Planning** | Greedy nearest-neighbour routing for shopping across multiple stores |
 | 🔎 **Product Search** | Query-based search across all supported stores simultaneously |
 | 🌐 **Web Dashboard** | Interactive frontend with Google Maps integration |
+| 📍 **Smart Location Input** | Auto-detect device location, text search with live suggestions (powered by OpenStreetMap) |
+| 🧠 **Pro AI Recommendations** | AI summaries and reasoning formatted with bold text, bullets and headings for clarity |
+| 🚗 **Built‑in Navigation** | "Show Route"/"Navigate" buttons open Google Maps directions directly from any recommendation |
 
 ---
 
 ## 🏗️ Project Structure
 
-```
+```text
 price_intelligence/
-├── app.py                  # Flask API server (all routes)
-├── config.py               # 30+ store registry, fuel constants, API keys
+├── app.py                   # Flask API server (all routes & AI endpoints)
+├── config.py                # 30+ store registry, fuel constants, API keys
 ├── demo_data.py             # Sample product data for offline/demo mode
 ├── requirements.txt         # Python dependencies
 ├── verify_scrapers.py       # Scraper health-check utility
@@ -43,18 +46,20 @@ price_intelligence/
 │   ├── books_scraper.py
 │   └── paints_scraper.py
 │
-├── services/                # Business logic
-│   ├── prediction_service.py  # Branch × product ranking engine
-│   └── decision_service.py    # Recommendation & multi-stop route planner
+├── services/                # Business logic Core
+│   ├── intelligence_service.py # Universal Shopping Advisor AI Engine
+│   ├── price_history_service.py# In-memory price trend tracker
+│   ├── prediction_service.py   # Branch × product ranking engine
+│   └── decision_service.py     # Recommendation & multi-stop route planner
 │
 ├── utils/
 │   └── distance.py          # Google Maps + Haversine distance calculations
 │
 ├── templates/
-│   └── index.html           # Web dashboard template
+│   └── index.html           # Web dashboard template (with AI Panel)
 │
 └── static/
-    ├── style.css            # Frontend styles
+    ├── style.css            # Frontend styles (Glassmorphic UI included)
     └── script.js            # Frontend logic & map integration
 ```
 
@@ -202,4 +207,5 @@ python verify_scrapers.py
 ## 📄 License
 
 This project is for educational and research purposes.
-]]>
+
+"# Calculated-Price-Prediction" 
